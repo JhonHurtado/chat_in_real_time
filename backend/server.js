@@ -117,29 +117,63 @@ app.post('/api/friends/request', (req, res) => {
   try {
     const { userId, friendId } = req.body;
 
-    if (userId === friendId) {
+    // Validar que se proporcionaron los IDs
+    if (!userId || !friendId) {
+      return res.status(400).json({ error: 'Se requieren userId y friendId' });
+    }
+
+    // Convertir a números para asegurar consistencia
+    const userIdNum = parseInt(userId);
+    const friendIdNum = parseInt(friendId);
+
+    if (userIdNum === friendIdNum) {
       return res.status(400).json({ error: 'No puedes enviarte solicitud a ti mismo' });
     }
 
-    const existing = friendshipQueries.findBetween.get(userId, friendId, friendId, userId);
-    if (existing) {
-      return res.status(400).json({ error: 'Ya existe una solicitud o amistad' });
+    // Verificar que ambos usuarios existen
+    const user = userQueries.findById.get(userIdNum);
+    const friend = userQueries.findById.get(friendIdNum);
+
+    if (!user) {
+      return res.status(404).json({ error: 'Usuario no encontrado' });
     }
 
-    friendshipQueries.create.run(userId, friendId, 'pending');
+    if (!friend) {
+      return res.status(404).json({ error: 'El usuario al que intentas enviar la solicitud no existe' });
+    }
+
+    // Verificar si ya existe una relación
+    const existing = friendshipQueries.findBetween.get(userIdNum, friendIdNum, friendIdNum, userIdNum);
+    if (existing) {
+      if (existing.status === 'accepted') {
+        return res.status(400).json({ error: 'Ya son amigos' });
+      } else if (existing.status === 'pending') {
+        if (existing.user_id === userIdNum) {
+          return res.status(400).json({ error: 'Ya enviaste una solicitud a este usuario' });
+        } else {
+          return res.status(400).json({ error: 'Este usuario ya te envió una solicitud. Revisa tus solicitudes pendientes.' });
+        }
+      } else if (existing.status === 'rejected') {
+        // Permitir reenviar solicitudes después de rechazo, eliminando la anterior
+        friendshipQueries.deleteRejected.run(userIdNum, friendIdNum, friendIdNum, userIdNum, 'rejected');
+      }
+    }
+
+    // Crear la solicitud
+    friendshipQueries.create.run(userIdNum, friendIdNum, 'pending');
     
     // Notificar por socket
-    const friendSocketId = connectedUsers.get(friendId);
+    const friendSocketId = connectedUsers.get(friendIdNum);
     if (friendSocketId) {
       io.to(friendSocketId).emit('friend_request', {
-        from: userQueries.findById.get(userId)
+        from: user
       });
     }
 
-    res.json({ message: 'Solicitud enviada' });
+    res.json({ message: 'Solicitud enviada exitosamente' });
   } catch (error) {
     console.error('Error al enviar solicitud:', error);
-    res.status(500).json({ error: 'Error al enviar solicitud' });
+    res.status(500).json({ error: 'Error interno del servidor al enviar solicitud' });
   }
 });
 

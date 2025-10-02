@@ -82,11 +82,23 @@ db.exec(`
     FOREIGN KEY (user_id) REFERENCES users(id)
   );
 
+  CREATE TABLE IF NOT EXISTS message_reads (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id INTEGER NOT NULL,
+    user_id INTEGER NOT NULL,
+    read_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (message_id) REFERENCES messages(id),
+    FOREIGN KEY (user_id) REFERENCES users(id),
+    UNIQUE(message_id, user_id)
+  );
+
   CREATE INDEX IF NOT EXISTS idx_friendships_user ON friendships(user_id);
   CREATE INDEX IF NOT EXISTS idx_friendships_friend ON friendships(friend_id);
   CREATE INDEX IF NOT EXISTS idx_messages_room ON messages(room_id);
   CREATE INDEX IF NOT EXISTS idx_room_members_room ON room_members(room_id);
   CREATE INDEX IF NOT EXISTS idx_room_members_user ON room_members(user_id);
+  CREATE INDEX IF NOT EXISTS idx_message_reads_message ON message_reads(message_id);
+  CREATE INDEX IF NOT EXISTS idx_message_reads_user ON message_reads(user_id);
 `);
 
 // Crear sala general por defecto si no existe
@@ -110,6 +122,7 @@ const friendshipQueries = {
   create: db.prepare('INSERT INTO friendships (user_id, friend_id, status) VALUES (?, ?, ?)'),
   findBetween: db.prepare('SELECT * FROM friendships WHERE (user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)'),
   updateStatus: db.prepare('UPDATE friendships SET status = ? WHERE id = ?'),
+  deleteRejected: db.prepare('DELETE FROM friendships WHERE ((user_id = ? AND friend_id = ?) OR (user_id = ? AND friend_id = ?)) AND status = ?'),
   getFriends: db.prepare(`
     SELECT u.id, u.username, u.display_name, u.last_seen 
     FROM users u 
@@ -163,12 +176,25 @@ const roomQueries = {
 const messageQueries = {
   create: db.prepare('INSERT INTO messages (room_id, user_id, content) VALUES (?, ?, ?)'),
   getByRoom: db.prepare(`
-    SELECT m.id, m.content, m.created_at, u.id as user_id, u.username, u.display_name
+    SELECT m.id, m.content, m.created_at, u.id as user_id, u.username, u.display_name,
+           (SELECT COUNT(*) FROM message_reads mr WHERE mr.message_id = m.id) as read_count
     FROM messages m
     INNER JOIN users u ON u.id = m.user_id
     WHERE m.room_id = ?
     ORDER BY m.created_at DESC
     LIMIT 100
+  `),
+  markAsRead: db.prepare('INSERT OR IGNORE INTO message_reads (message_id, user_id) VALUES (?, ?)'),
+  getUnreadCount: db.prepare(`
+    SELECT COUNT(*) as count FROM messages m
+    WHERE m.room_id = ? AND m.user_id != ? 
+    AND NOT EXISTS (SELECT 1 FROM message_reads mr WHERE mr.message_id = m.id AND mr.user_id = ?)
+  `),
+  getReadStatus: db.prepare(`
+    SELECT mr.user_id, u.username, u.display_name 
+    FROM message_reads mr
+    INNER JOIN users u ON u.id = mr.user_id
+    WHERE mr.message_id = ?
   `)
 };
 
