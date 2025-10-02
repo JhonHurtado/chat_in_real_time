@@ -4,6 +4,7 @@
   "description": "Frontend para chat en tiempo real con React",
   "private": true,
   "dependencies": {
+    "lucide-react": "^0.544.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-scripts": "5.0.1",

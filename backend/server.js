@@ -11,282 +11,349 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: '*',
-    methods: ['GET', 'POST']
+    origin: process.env.CORS_ORIGIN || '*',
+    methods: ['GET', 'POST'],
+    credentials: true
   }
 });
 
 const PORT = process.env.PORT || 3001;
+const connectedUsers = new Map();
 
 // Middleware
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
 
-// Almacenar usuarios conectados
-const connectedUsers = new Map();
-
-// Rutas de autenticación
-app.post('/api/register', async (req, res) => {
-  try {
-    const { username, password, displayName } = req.body;
-
-    if (!username || !password || !displayName) {
-      return res.status(400).json({ error: 'Todos los campos son requeridos' });
-    }
-
-    const existingUser = userQueries.findByUsername.get(username);
-    if (existingUser) {
-      return res.status(400).json({ error: 'El usuario ya existe' });
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-    const result = userQueries.create.run(username, hashedPassword, displayName);
-
-    res.json({
-      message: 'Usuario creado exitosamente',
-      user: {
-        id: result.lastInsertRowid,
-        username,
-        displayName
-      }
+// Middleware de validación
+const validateRequired = (fields) => (req, res, next) => {
+  const missing = fields.filter(field => !req.body[field]);
+  if (missing.length > 0) {
+    return res.status(400).json({ 
+      error: 'Campos requeridos faltantes', 
+      missing 
     });
-  } catch (error) {
-    console.error('Error en registro:', error);
-    res.status(500).json({ error: 'Error al registrar usuario' });
   }
-});
+  next();
+};
 
-app.post('/api/login', async (req, res) => {
-  try {
-    const { username, password } = req.body;
-
-    const user = userQueries.findByUsername.get(username);
-    if (!user) {
-      return res.status(401).json({ error: 'Credenciales inválidas' });
-    }
-
-    const validPassword = await bcrypt.compare(password, user.password);
-    if (!validPassword) {
-      return res.status(401).json({ error: 'Credenciales inválidas' });
-    }
-
-    userQueries.updateLastSeen.run(user.id);
-
-    res.json({
-      user: {
-        id: user.id,
-        username: user.username,
-        displayName: user.display_name
-      }
-    });
-  } catch (error) {
-    console.error('Error en login:', error);
-    res.status(500).json({ error: 'Error al iniciar sesión' });
+const validatePositiveInt = (param, source = 'params') => (req, res, next) => {
+  const value = parseInt(req[source][param]);
+  if (isNaN(value) || value <= 0) {
+    return res.status(400).json({ error: `${param} debe ser un número positivo` });
   }
-});
+  req[source][param] = value;
+  next();
+};
 
-// Rutas de usuarios
-app.get('/api/users/search', (req, res) => {
-  try {
-    const { q } = req.query;
-    if (!q) {
-      return res.json([]);
-    }
+// Middleware de manejo de errores
+const asyncHandler = (fn) => (req, res, next) => {
+  Promise.resolve(fn(req, res, next)).catch(next);
+};
 
-    const searchTerm = `%${q}%`;
-    const users = userQueries.search.all(searchTerm, searchTerm);
-    res.json(users);
-  } catch (error) {
-    console.error('Error en búsqueda:', error);
-    res.status(500).json({ error: 'Error al buscar usuarios' });
+// ==================== AUTENTICACIÓN ====================
+
+app.post('/api/register', validateRequired(['username', 'password', 'displayName']), asyncHandler(async (req, res) => {
+  const { username, password, displayName } = req.body;
+
+  if (username.length < 3 || username.length > 20) {
+    return res.status(400).json({ error: 'El usuario debe tener entre 3 y 20 caracteres' });
   }
-});
 
-app.get('/api/users', (req, res) => {
-  try {
-    const users = userQueries.getAll.all();
-    res.json(users);
-  } catch (error) {
-    console.error('Error al obtener usuarios:', error);
-    res.status(500).json({ error: 'Error al obtener usuarios' });
+  if (password.length < 6) {
+    return res.status(400).json({ error: 'La contraseña debe tener al menos 6 caracteres' });
   }
-});
 
-// Rutas de amistad
-app.post('/api/friends/request', (req, res) => {
-  try {
-    const { userId, friendId } = req.body;
+  if (!/^[a-zA-Z0-9_]+$/.test(username)) {
+    return res.status(400).json({ error: 'El usuario solo puede contener letras, números y guiones bajos' });
+  }
 
-    // Validar que se proporcionaron los IDs
-    if (!userId || !friendId) {
-      return res.status(400).json({ error: 'Se requieren userId y friendId' });
+  const existingUser = userQueries.findByUsername.get(username.toLowerCase());
+  if (existingUser) {
+    return res.status(409).json({ error: 'El usuario ya existe' });
+  }
+
+  const hashedPassword = await bcrypt.hash(password, 10);
+  const result = userQueries.create.run(username.toLowerCase(), hashedPassword, displayName.trim());
+
+  res.status(201).json({
+    message: 'Usuario creado exitosamente',
+    user: {
+      id: result.lastInsertRowid,
+      username: username.toLowerCase(),
+      displayName: displayName.trim()
     }
+  });
+}));
 
-    // Convertir a números para asegurar consistencia
-    const userIdNum = parseInt(userId);
-    const friendIdNum = parseInt(friendId);
+app.post('/api/login', validateRequired(['username', 'password']), asyncHandler(async (req, res) => {
+  const { username, password } = req.body;
 
-    if (userIdNum === friendIdNum) {
-      return res.status(400).json({ error: 'No puedes enviarte solicitud a ti mismo' });
+  const user = userQueries.findByUsername.get(username.toLowerCase());
+  if (!user) {
+    return res.status(401).json({ error: 'Credenciales inválidas' });
+  }
+
+  const validPassword = await bcrypt.compare(password, user.password);
+  if (!validPassword) {
+    return res.status(401).json({ error: 'Credenciales inválidas' });
+  }
+
+  userQueries.updateLastSeen.run(user.id);
+
+  res.json({
+    user: {
+      id: user.id,
+      username: user.username,
+      displayName: user.display_name
     }
+  });
+}));
 
-    // Verificar que ambos usuarios existen
-    const user = userQueries.findById.get(userIdNum);
-    const friend = userQueries.findById.get(friendIdNum);
+// ==================== USUARIOS ====================
 
-    if (!user) {
-      return res.status(404).json({ error: 'Usuario no encontrado' });
-    }
+app.get('/api/users/search', asyncHandler(async (req, res) => {
+  const { q } = req.query;
+  
+  if (!q || q.trim().length === 0) {
+    return res.json([]);
+  }
 
-    if (!friend) {
-      return res.status(404).json({ error: 'El usuario al que intentas enviar la solicitud no existe' });
-    }
+  if (q.length < 2) {
+    return res.status(400).json({ error: 'La búsqueda debe tener al menos 2 caracteres' });
+  }
 
-    // Verificar si ya existe una relación
-    const existing = friendshipQueries.findBetween.get(userIdNum, friendIdNum, friendIdNum, userIdNum);
-    if (existing) {
-      if (existing.status === 'accepted') {
-        return res.status(400).json({ error: 'Ya son amigos' });
-      } else if (existing.status === 'pending') {
+  const searchTerm = `%${q.trim()}%`;
+  const users = userQueries.search.all(searchTerm, searchTerm);
+  res.json(users);
+}));
+
+app.get('/api/users', asyncHandler(async (req, res) => {
+  const users = userQueries.getAll.all();
+  res.json(users);
+}));
+
+// ==================== AMISTAD ====================
+
+app.post('/api/friends/request', validateRequired(['userId', 'friendId']), asyncHandler(async (req, res) => {
+  const userIdNum = parseInt(req.body.userId);
+  const friendIdNum = parseInt(req.body.friendId);
+
+  if (isNaN(userIdNum) || isNaN(friendIdNum)) {
+    return res.status(400).json({ error: 'IDs inválidos' });
+  }
+
+  if (userIdNum === friendIdNum) {
+    return res.status(400).json({ error: 'No puedes enviarte solicitud a ti mismo' });
+  }
+
+  const user = userQueries.findById.get(userIdNum);
+  const friend = userQueries.findById.get(friendIdNum);
+
+  if (!user) {
+    return res.status(404).json({ error: 'Usuario no encontrado' });
+  }
+
+  if (!friend) {
+    return res.status(404).json({ error: 'Usuario destinatario no encontrado' });
+  }
+
+  const existing = friendshipQueries.findBetween.get(userIdNum, friendIdNum, friendIdNum, userIdNum);
+  
+  if (existing) {
+    switch (existing.status) {
+      case 'accepted':
+        return res.status(409).json({ error: 'Ya son amigos' });
+      case 'pending':
         if (existing.user_id === userIdNum) {
-          return res.status(400).json({ error: 'Ya enviaste una solicitud a este usuario' });
-        } else {
-          return res.status(400).json({ error: 'Este usuario ya te envió una solicitud. Revisa tus solicitudes pendientes.' });
+          return res.status(409).json({ error: 'Solicitud ya enviada' });
         }
-      } else if (existing.status === 'rejected') {
-        // Permitir reenviar solicitudes después de rechazo, eliminando la anterior
+        return res.status(409).json({ error: 'Este usuario ya te envió una solicitud' });
+      case 'rejected':
         friendshipQueries.deleteRejected.run(userIdNum, friendIdNum, friendIdNum, userIdNum, 'rejected');
+        break;
+    }
+  }
+
+  friendshipQueries.create.run(userIdNum, friendIdNum, 'pending');
+  
+  const friendSocketId = connectedUsers.get(friendIdNum);
+  if (friendSocketId) {
+    io.to(friendSocketId).emit('friend_request', { from: user });
+  }
+
+  res.status(201).json({ message: 'Solicitud enviada exitosamente' });
+}));
+
+app.post('/api/friends/respond', validateRequired(['requestId', 'accept']), asyncHandler(async (req, res) => {
+  const { requestId, accept } = req.body;
+  const requestIdNum = parseInt(requestId);
+
+  if (isNaN(requestIdNum)) {
+    return res.status(400).json({ error: 'ID de solicitud inválido' });
+  }
+
+  if (typeof accept !== 'boolean') {
+    return res.status(400).json({ error: 'El campo accept debe ser booleano' });
+  }
+
+  const status = accept ? 'accepted' : 'rejected';
+  const changes = friendshipQueries.updateStatus.run(status, requestIdNum);
+
+  if (changes.changes === 0) {
+    return res.status(404).json({ error: 'Solicitud no encontrada' });
+  }
+
+  res.json({ message: accept ? 'Solicitud aceptada' : 'Solicitud rechazada' });
+}));
+
+app.get('/api/friends/:userId', validatePositiveInt('userId'), asyncHandler(async (req, res) => {
+  const userId = req.params.userId;
+  const friends = friendshipQueries.getFriends.all(userId, userId, userId);
+  res.json(friends);
+}));
+
+app.get('/api/friends/requests/:userId', validatePositiveInt('userId'), asyncHandler(async (req, res) => {
+  const userId = req.params.userId;
+  const requests = friendshipQueries.getPendingRequests.all(userId);
+  res.json(requests);
+}));
+
+// ==================== SALAS ====================
+
+app.get('/api/rooms/general', asyncHandler(async (req, res) => {
+  const rooms = roomQueries.getGeneral.all();
+  res.json(rooms);
+}));
+
+app.get('/api/rooms/user/:userId', validatePositiveInt('userId'), asyncHandler(async (req, res) => {
+  const userId = req.params.userId;
+  const rooms = roomQueries.getUserRooms.all(userId);
+  res.json(rooms);
+}));
+
+app.post('/api/rooms/create', validateRequired(['name', 'type', 'createdBy']), asyncHandler(async (req, res) => {
+  const { name, type, createdBy, members } = req.body;
+
+  if (!name.trim() || name.trim().length < 3) {
+    return res.status(400).json({ error: 'El nombre debe tener al menos 3 caracteres' });
+  }
+
+  if (!['general', 'group', 'private'].includes(type)) {
+    return res.status(400).json({ error: 'Tipo de sala inválido' });
+  }
+
+  const createdByNum = parseInt(createdBy);
+  if (isNaN(createdByNum)) {
+    return res.status(400).json({ error: 'ID de creador inválido' });
+  }
+
+  const creator = userQueries.findById.get(createdByNum);
+  if (!creator) {
+    return res.status(404).json({ error: 'Usuario creador no encontrado' });
+  }
+
+  const result = roomQueries.create.run(name.trim(), type, createdByNum);
+  const roomId = result.lastInsertRowid;
+
+  roomQueries.addMember.run(roomId, createdByNum);
+
+  if (Array.isArray(members) && members.length > 0) {
+    members.forEach(memberId => {
+      const memberIdNum = parseInt(memberId);
+      if (!isNaN(memberIdNum) && memberIdNum !== createdByNum) {
+        roomQueries.addMember.run(roomId, memberIdNum);
+      }
+    });
+  }
+
+  res.status(201).json({
+    id: roomId,
+    name: name.trim(),
+    type,
+    created_by: createdByNum
+  });
+}));
+
+app.get('/api/rooms/:roomId/messages', validatePositiveInt('roomId'), asyncHandler(async (req, res) => {
+  const roomId = req.params.roomId;
+  const { userId } = req.query;
+
+  if (userId) {
+    const userIdNum = parseInt(userId);
+    if (!isNaN(userIdNum)) {
+      const isMember = roomQueries.isMember.get(roomId, userIdNum);
+      if (!isMember || isMember.count === 0) {
+        return res.status(403).json({ error: 'No tienes acceso a esta sala' });
       }
     }
+  }
 
-    // Crear la solicitud
-    friendshipQueries.create.run(userIdNum, friendIdNum, 'pending');
-    
-    // Notificar por socket
-    const friendSocketId = connectedUsers.get(friendIdNum);
-    if (friendSocketId) {
-      io.to(friendSocketId).emit('friend_request', {
-        from: user
-      });
+  const messages = messageQueries.getByRoom.all(roomId);
+  
+  const decryptedMessages = messages.map(msg => {
+    try {
+      return {
+        ...msg,
+        content: decrypt(msg.content)
+      };
+    } catch (error) {
+      console.error(`Error al desencriptar mensaje ${msg.id}:`, error);
+      return {
+        ...msg,
+        content: '[Mensaje no disponible]'
+      };
     }
+  }).reverse();
 
-    res.json({ message: 'Solicitud enviada exitosamente' });
-  } catch (error) {
-    console.error('Error al enviar solicitud:', error);
-    res.status(500).json({ error: 'Error interno del servidor al enviar solicitud' });
-  }
+  res.json(decryptedMessages);
+}));
+
+// ==================== HEALTH CHECK ====================
+
+app.get('/api/health', (req, res) => {
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime()
+  });
 });
 
-app.post('/api/friends/respond', (req, res) => {
-  try {
-    const { requestId, accept } = req.body;
+// ==================== MANEJO DE ERRORES ====================
 
-    const status = accept ? 'accepted' : 'rejected';
-    friendshipQueries.updateStatus.run(status, requestId);
-
-    res.json({ message: accept ? 'Solicitud aceptada' : 'Solicitud rechazada' });
-  } catch (error) {
-    console.error('Error al responder solicitud:', error);
-    res.status(500).json({ error: 'Error al responder solicitud' });
-  }
+app.use((req, res) => {
+  res.status(404).json({ error: 'Ruta no encontrada' });
 });
 
-app.get('/api/friends/:userId', (req, res) => {
-  try {
-    const userId = parseInt(req.params.userId);
-    const friends = friendshipQueries.getFriends.all(userId, userId, userId);
-    res.json(friends);
-  } catch (error) {
-    console.error('Error al obtener amigos:', error);
-    res.status(500).json({ error: 'Error al obtener amigos' });
+app.use((err, req, res, next) => {
+  console.error('[Error]', err);
+  
+  if (err.type === 'entity.parse.failed') {
+    return res.status(400).json({ error: 'JSON inválido' });
   }
+
+  res.status(500).json({ 
+    error: 'Error interno del servidor',
+    ...(process.env.NODE_ENV === 'development' && { message: err.message })
+  });
 });
 
-app.get('/api/friends/requests/:userId', (req, res) => {
-  try {
-    const userId = parseInt(req.params.userId);
-    const requests = friendshipQueries.getPendingRequests.all(userId);
-    res.json(requests);
-  } catch (error) {
-    console.error('Error al obtener solicitudes:', error);
-    res.status(500).json({ error: 'Error al obtener solicitudes' });
-  }
-});
+// ==================== INICIALIZACIÓN ====================
 
-// Rutas de salas
-app.get('/api/rooms/general', (req, res) => {
-  try {
-    const rooms = roomQueries.getGeneral.all();
-    res.json(rooms);
-  } catch (error) {
-    console.error('Error al obtener salas generales:', error);
-    res.status(500).json({ error: 'Error al obtener salas' });
-  }
-});
-
-app.get('/api/rooms/user/:userId', (req, res) => {
-  try {
-    const userId = parseInt(req.params.userId);
-    const rooms = roomQueries.getUserRooms.all(userId);
-    res.json(rooms);
-  } catch (error) {
-    console.error('Error al obtener salas del usuario:', error);
-    res.status(500).json({ error: 'Error al obtener salas' });
-  }
-});
-
-app.post('/api/rooms/create', (req, res) => {
-  try {
-    const { name, type, createdBy, members } = req.body;
-
-    const result = roomQueries.create.run(name, type, createdBy);
-    const roomId = result.lastInsertRowid;
-
-    // Agregar miembros
-    if (members && members.length > 0) {
-      members.forEach(memberId => {
-        roomQueries.addMember.run(roomId, memberId);
-      });
-    }
-
-    // Agregar al creador
-    roomQueries.addMember.run(roomId, createdBy);
-
-    res.json({
-      id: roomId,
-      name,
-      type,
-      created_by: createdBy
-    });
-  } catch (error) {
-    console.error('Error al crear sala:', error);
-    res.status(500).json({ error: 'Error al crear sala' });
-  }
-});
-
-app.get('/api/rooms/:roomId/messages', (req, res) => {
-  try {
-    const roomId = parseInt(req.params.roomId);
-    const messages = messageQueries.getByRoom.all(roomId);
-
-    const decryptedMessages = messages.map(msg => ({
-      ...msg,
-      content: decrypt(msg.content)
-    })).reverse();
-
-    res.json(decryptedMessages);
-  } catch (error) {
-    console.error('Error al obtener mensajes:', error);
-    res.status(500).json({ error: 'Error al obtener mensajes' });
-  }
-});
-
-// Inicializar Socket.IO
 initializeSocket(io, connectedUsers);
 
 server.listen(PORT, '0.0.0.0', () => {
   console.log(`\n🚀 Servidor corriendo en http://localhost:${PORT}`);
-  console.log(`🌐 Accesible en red local en http://<TU_IP_LOCAL>:${PORT}\n`);
+  console.log(`🌐 Accesible en red local en http://<TU_IP_LOCAL>:${PORT}`);
+  console.log(`📡 WebSocket habilitado\n`);
+});
+
+// Manejo de cierre graceful
+process.on('SIGTERM', () => {
+  console.log('SIGTERM recibido. Cerrando servidor...');
+  server.close(() => {
+    console.log('Servidor cerrado correctamente');
+    process.exit(0);
+  });
 });
 
 module.exports = { app, server, io };
