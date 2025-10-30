@@ -1,0 +1,27 @@
+{
+  "name": "chat_in_real_time",
+  "version": "1.0.0",
+  "description": "Aplicación de chat en tiempo real que funciona en red local usando Socket.IO, React, Node.js, Express y SQLite.",
+  "main": "index.js",
+  "scripts": {
+    "start": "npm run all",
+    "all": "npm run server & npm run client",
+    "server": "cd backend && npm run dev",
+    "server:prod": "cd backend && npm start",
+    "client": "cd frontend && npm start",
+    "client:build": "cd frontend && npm run build",
+    "client:preview": "cd frontend && npm run preview",
+    "clean": "rm -rf backend/node_modules frontend/node_modules dist",
+    "install:all": "npm install && cd backend && npm install && cd ../frontend && npm install"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JhonHurtado/chat_in_real_time.git"
+  },
+  "author": "Jhon Hurtado -  Nina Moscoso",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/JhonHurtado/chat_in_real_time/issues"
+  },
+  "homepage": "https://github.com/JhonHurtado/chat_in_real_time#readme"
+}
