@@ -74,8 +74,8 @@ La aplicación estará en `http://localhost:3000` 🎉
    ```
 
 2. **Configura el frontend:**
-   - Edita `frontend/.env`
-   - Cambia `REACT_APP_SOCKET_URL=http://TU_IP_LOCAL:3001`
+   - Edita `frontend/src/socket.js`
+   - Cambia `SOCKET_URL:http://TU_IP_LOCAL:3001`
 
 3. **Accede desde otros dispositivos:**
    - `http://TU_IP_LOCAL:3000`
@@ -173,7 +173,7 @@ Este proyecto está bajo la licencia MIT. Ver [LICENSE](LICENSE) para más detal
 
 **JhonHurtado**
 
-- GitHub: [@JhonHurtado](https://github.com/JhonHurtado)
+- GitHub: [@JhonHurtado](https://github.com/JhonHurtado) [@nina-moscoso](https://github.com/nina-moscoso)
 
 ## 🙏 Agradecimientos
 
