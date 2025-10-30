@@ -8,11 +8,11 @@
     "all": "npm run server & npm run client",
     "server": "cd backend && npm run dev",
     "server:prod": "cd backend && npm start",
-    "client": "cd frontend && npm start",
-    "client:build": "cd frontend && npm run build",
-    "client:preview": "cd frontend && npm run preview",
-    "clean": "rm -rf backend/node_modules frontend/node_modules dist",
-    "install:all": "npm install && cd backend && npm install && cd ../frontend && npm install"
+    "client": "cd client && npm start",
+    "client:build": "cd client && npm run build",
+    "client:preview": "cd client && npm run preview",
+    "clean": "rm -rf backend/node_modules client/node_modules dist",
+    "install:all": "npm install && cd backend && npm install && cd ../client && npm install"
   },
   "repository": {
     "type": "git",
@@ -24,4 +24,5 @@
     "url": "https://github.com/JhonHurtado/chat_in_real_time/issues"
   },
   "homepage": "https://github.com/JhonHurtado/chat_in_real_time#readme"
+
 }

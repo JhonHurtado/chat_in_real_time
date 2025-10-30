@@ -418,31 +418,6 @@ function App() {
         </main>
       </div>
 
-      {/* TABS INFERIORES (solo móvil) */}
-      <nav className="md:hidden border-t border-gray-800 bg-gray-900">
-        <div className="grid grid-cols-3">
-          {[
-            { id: 'chats', label: 'Chats', icon: MessageCircle },
-            { id: 'friends', label: 'Amigos', icon: Users },
-            { id: 'groups', label: 'Grupos', icon: UsersRound },
-          ].map((tab) => {
-            const active = activeSection === (tab.id);
-            return (
-              <button
-                key={tab.id}
-                onClick={() => setActiveSection(tab.id)}
-                className={`flex flex-col items-center justify-center py-2.5 text-xs ${
-                  active ? 'text-blue-500' : 'text-gray-400'
-                }`}
-                aria-label={tab.label}
-              >
-                <tab.icon size={18} />
-                <span className="mt-1">{tab.label}</span>
-              </button>
-            );
-          })}
-        </div>
-      </nav>
 
       {/* Modales */}
       {showFriendRequests && (
